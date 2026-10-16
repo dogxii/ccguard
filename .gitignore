@@ -1,0 +1,14 @@
+# Build output
+/bin/
+*.test
+coverage.out
+
+# Local files
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Local operational records
+/docs/SETTINGS-CLEANUP.md
+/docs/VALIDATION.md

@@ -1,0 +1,13 @@
+#!name=CCGuard 官方域名分流
+#!desc=可选模块：只分流，不解密、不重写。导入后手动选择一条线路；不使用自动测速或 fallback。
+
+[Proxy Group]
+CCGuard = select, policy-regex-filter=(?i)(🇸🇬|🇯🇵|🇺🇸|🇹🇼|Singapore|Japan|United States|新加坡|日本|美国|台湾|\bSG\b|\bJP\b|\bUS\b|\bTW\b)
+
+[Rule]
+DOMAIN-SUFFIX,anthropic.com,CCGuard
+DOMAIN-SUFFIX,claude.ai,CCGuard
+DOMAIN-SUFFIX,claude.com,CCGuard
+DOMAIN-SUFFIX,claude.app,CCGuard
+DOMAIN-SUFFIX,claudeusercontent.com,CCGuard
+DOMAIN-SUFFIX,claudemcpcontent.com,CCGuard
