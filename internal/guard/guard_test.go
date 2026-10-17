@@ -25,6 +25,9 @@ func testConfig(t *testing.T) Config {
 	t.Cleanup(func() { os.RemoveAll(d) })
 	t.Setenv("CCG_CONFIG", filepath.Join(d, "config.json"))
 	c := defaultConfig()
+	// Tests must not depend on an installed Claude CLI or the system proxy.
+	c.Claude = filepath.Join(d, "claude")
+	c.Upstream = "http://127.0.0.1:7897"
 	c.Timeout = 1
 	c.Interval = 10
 	return c
@@ -83,6 +86,33 @@ func TestDefaultConfigPathKeepsSameStateAcrossBackgroundProcess(t *testing.T) {
 	after := paths()
 	if before != after {
 		t.Fatalf("explicit default path changes runtime directories: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestIsolatedCLISettingsDoNotScanAncestorHome(t *testing.T) {
+	c := desktopTestConfig(t)
+	home, _ := os.UserHomeDir()
+	project := filepath.Join(home, "projects", "example")
+	if e := os.MkdirAll(project, 0700); e != nil {
+		t.Fatal(e)
+	}
+	t.Chdir(project)
+	if e := writeJSON(sharedSettingsPath(), map[string]string{"apiKeyHelper": "default-home-helper"}); e != nil {
+		t.Fatal(e)
+	}
+	if e := checkSettings(c); e != nil {
+		t.Fatalf("isolated CLI loaded default home settings: %v", e)
+	}
+	desktop := c
+	desktop.ClaudeDir = filepath.Dir(sharedSettingsPath())
+	if checkSettings(desktop) == nil {
+		t.Fatal("Desktop skipped its explicitly selected default settings")
+	}
+	if e := writeJSON(filepath.Join(project, ".claude/settings.json"), map[string]string{"apiKeyHelper": "project-helper"}); e != nil {
+		t.Fatal(e)
+	}
+	if checkSettings(c) == nil {
+		t.Fatal("project helper was not checked")
 	}
 }
 

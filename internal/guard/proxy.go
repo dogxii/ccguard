@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,8 +91,7 @@ func targetHost(address string) (string, error) {
 	if e != nil {
 		return "", errors.New("目标必须包含端口")
 	}
-	n, e := strconv.Atoi(p)
-	if e != nil || n < 1 || n > 65535 {
+	if !validPort(p) {
 		return "", errors.New("端口无效")
 	}
 	h = strings.ToLower(h)
@@ -192,11 +190,19 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		n, e := resp.Body.Read(buf)
 		if n > 0 {
 			if _, we := w.Write(buf[:n]); we != nil {
-				break
+				event("http", h, "client_closed")
+				return
 			}
 			_ = http.NewResponseController(w).Flush()
 		}
 		if e != nil {
+			if e != io.EOF {
+				p.failures.Add(1)
+				event("http", h, "upstream_error")
+				// Headers are already sent. Abort the downstream response so
+				// clients do not mistake a truncated stream for a complete one.
+				panic(http.ErrAbortHandler)
+			}
 			break
 		}
 	}
@@ -204,8 +210,10 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func stripHop(h http.Header) {
-	for _, s := range strings.Split(h.Get("Connection"), ",") {
-		h.Del(strings.TrimSpace(s))
+	for _, value := range h.Values("Connection") {
+		for _, s := range strings.Split(value, ",") {
+			h.Del(strings.TrimSpace(s))
+		}
 	}
 	for _, s := range []string{"Connection", "Proxy-Connection", "Proxy-Authenticate", "Proxy-Authorization", "Keep-Alive", "TE", "Trailer", "Transfer-Encoding", "Upgrade"} {
 		h.Del(s)

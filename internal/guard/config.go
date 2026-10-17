@@ -1,20 +1,23 @@
 package guard
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-const Version = "0.2.1"
+const Version = "0.2.2"
 
 type Config struct {
 	Schema              int    `json:"schema"`
@@ -72,27 +75,39 @@ func (c Config) validate() error {
 		return errors.New("不支持的配置版本")
 	}
 	u, e := url.Parse(c.Upstream)
-	if e != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+	if e != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.Path != "" || u.ForceQuery || u.RawQuery != "" || u.Fragment != "" {
 		return errors.New("upstream_proxy 必须是 HTTP(S) 代理地址；不支持 SOCKS 或带路径的地址")
 	}
 	if u.User != nil {
 		return errors.New("此版本不保存代理密码；请使用 PopCat 的本地无密码代理端口")
 	}
+	if strings.HasSuffix(u.Host, ":") || (u.Port() != "" && !validPort(u.Port())) {
+		return errors.New("上游代理端口应为 1–65535")
+	}
 	h, port, e := net.SplitHostPort(c.Listen)
-	if e != nil || net.ParseIP(h) == nil || !net.ParseIP(h).IsLoopback() || port == "0" {
+	if e != nil || net.ParseIP(h) == nil || !net.ParseIP(h).IsLoopback() || !validPort(port) {
 		return errors.New("listen 必须是带固定端口的回环 IP，例如 127.0.0.1:17897")
 	}
-	upstreamLocal := u.Hostname() == "localhost"
+	upstreamLocal := strings.EqualFold(strings.TrimSuffix(u.Hostname(), "."), "localhost")
 	if ip := net.ParseIP(u.Hostname()); ip != nil && ip.IsLoopback() {
 		upstreamLocal = true
 	}
-	if u.Host == c.Listen || (upstreamLocal && u.Port() == port) {
+	upstreamPort := u.Port()
+	if upstreamPort == "" {
+		upstreamPort = "80"
+		if u.Scheme == "https" {
+			upstreamPort = "443"
+		}
+	}
+	upstreamNumber, _ := strconv.Atoi(upstreamPort)
+	listenNumber, _ := strconv.Atoi(port)
+	if upstreamLocal && upstreamNumber == listenNumber {
 		return errors.New("上游代理不能指向 ccg 自己")
 	}
 	if c.Timeout < 1 || c.Timeout > 120 || c.Interval < 10 || c.Interval > 3600 {
 		return errors.New("检查间隔应为 10–3600 秒，连接超时应为 1–120 秒")
 	}
-	if c.ExpectedCountry != "" && (len(c.ExpectedCountry) != 2 || strings.ToUpper(c.ExpectedCountry) != c.ExpectedCountry) {
+	if c.ExpectedCountry != "" && !validCountry(c.ExpectedCountry) {
 		return errors.New("expected_country 应为空或两个大写字母的国家/地区代码")
 	}
 	if c.Desktop != "" && (!filepath.IsAbs(c.Desktop) || filepath.Ext(c.Desktop) != ".app") {
@@ -114,16 +129,28 @@ func (c Config) validate() error {
 	return nil
 }
 
+func validPort(s string) bool {
+	n, e := strconv.ParseUint(s, 10, 16)
+	return e == nil && n != 0
+}
+
+func validCountry(s string) bool {
+	return len(s) == 2 && s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'A' && s[1] <= 'Z'
+}
+
 func loadConfig() (Config, error) {
 	var c Config
 	b, e := os.ReadFile(paths().Config)
 	if e != nil {
 		return c, fmt.Errorf("读取配置失败；先运行 ccg init: %w", e)
 	}
-	d := json.NewDecoder(strings.NewReader(string(b)))
+	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	if e = d.Decode(&c); e != nil {
 		return c, fmt.Errorf("配置 JSON 无效: %w", e)
+	}
+	if e = d.Decode(new(any)); e != io.EOF {
+		return c, errors.New("配置 JSON 无效：只允许一个 JSON 对象")
 	}
 	return c, c.validate()
 }

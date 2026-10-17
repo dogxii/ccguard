@@ -58,14 +58,15 @@ func serviceSignature(c Config) string {
 	return hex.EncodeToString(s[:])
 }
 func socketPath() string { return filepath.Join(paths().State, "control.sock") }
-func controlClient() *http.Client {
-	return &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", socketPath())
-	}}, Timeout: 40 * time.Second}
-}
 func control(method, path string) (Status, error) {
+	return controlWithTimeout(method, path, 5*time.Second)
+}
+
+func controlWithTimeout(method, path string, timeout time.Duration) (Status, error) {
 	var st Status
-	cl := controlClient()
+	cl := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", socketPath())
+	}}, Timeout: timeout}
 	defer cl.CloseIdleConnections()
 	req, _ := http.NewRequest(method, "http://ccg"+path, nil)
 	r, e := cl.Do(req)
@@ -112,7 +113,7 @@ func probes(c Config) []Probe {
 						if k == "ip" && net.ParseIP(v) != nil {
 							p.IP = v
 						}
-						if k == "loc" && len(v) == 2 && v[0] >= 'A' && v[0] <= 'Z' && v[1] >= 'A' && v[1] <= 'Z' {
+						if k == "loc" && validCountry(v) {
 							p.Country = v
 						}
 					}
@@ -168,7 +169,7 @@ func requireReadyService(c Config) error {
 	if _, e := ensureService(c); e != nil {
 		return e
 	}
-	st, e := control("POST", "/check")
+	st, e := controlWithTimeout("POST", "/check", time.Duration(c.Timeout+5)*time.Second)
 	if e != nil {
 		return e
 	}
@@ -209,8 +210,17 @@ func serve(c Config) error {
 	st := Status{Version: Version, PID: os.Getpid(), Started: time.Now(), Signature: serviceSignature(c), Proxy: "http://" + c.Listen, Upstream: c.Upstream, Reason: "正在检查上游网络"}
 	var mu, checkMu sync.Mutex
 	check := func() {
+		requested := time.Now()
 		checkMu.Lock()
 		defer checkMu.Unlock()
+		mu.Lock()
+		alreadyChecked := st.Checked.After(requested)
+		mu.Unlock()
+		// Requests that arrived during a check share its result instead of
+		// queuing another full round of probes (including the startup check).
+		if alreadyChecked {
+			return
+		}
 		ps := probes(c)
 		ready := true
 		reason := ""

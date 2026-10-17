@@ -74,7 +74,15 @@ func guardSettings(c Config) string {
 func settingsFiles(c Config) []string {
 	out := []string{filepath.Join(c.ClaudeDir, "settings.json"), "/Library/Application Support/ClaudeCode/managed-settings.json"}
 	d, _ := os.Getwd()
+	start := d
+	home, _ := os.UserHomeDir()
 	for {
+		// An ancestor HOME is a user-settings location, not a project.
+		// The selected user directory was already included above. Scanning
+		// ~/.claude here would wrongly reject an isolated CLI configuration.
+		if d == home && d != start {
+			break
+		}
 		out = append(out, filepath.Join(d, ".claude/settings.json"), filepath.Join(d, ".claude/settings.local.json"))
 		parent := filepath.Dir(d)
 		if parent == d {
